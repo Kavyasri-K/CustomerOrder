@@ -5,6 +5,10 @@ import com.customer.orderservice.dto.OrderResponse;
 import com.customer.orderservice.dto.UpdateOrderStatusRequest;
 import com.customer.orderservice.service.OrderService;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
+import org.springframework.data.web.PagedModel;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,9 +17,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.List;
 
 @RestController
 @RequestMapping("/orders")
@@ -47,9 +50,14 @@ public class OrderController {
         return ResponseEntity.ok(updated);
     }
 
+    /**
+     * GET /orders?customerId=12345&page=0&size=10&sort=createdAt,desc
+     * All parameters are optional. Default: page 0, size 20, newest first.
+     */
     @GetMapping
-    public ResponseEntity<List<OrderResponse>> getAllOrders() {
-        List<OrderResponse> orders = orderService.getAllOrders();
-        return ResponseEntity.ok(orders);
+    public ResponseEntity<PagedModel<OrderResponse>> getOrders(
+            @RequestParam(required = false) String customerId,
+            @PageableDefault(size = 20, sort = "id", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(new PagedModel<>(orderService.getOrders(customerId, pageable)));
     }
 }

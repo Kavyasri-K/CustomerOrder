@@ -7,13 +7,15 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "customer_orders")
+@Table(name = "customer_orders", indexes = @Index(name = "idx_orders_customer_id", columnList = "customerId"))
 public class Order {
 
     @Id
@@ -29,8 +31,8 @@ public class Order {
     @Column(nullable = false)
     private Integer quantity;
 
-    @Column(nullable = false)
-    private Double price;
+    @Column(nullable = false, precision = 19, scale = 2)
+    private BigDecimal price;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -42,7 +44,8 @@ public class Order {
     public Order() {
     }
 
-    public Order(Long id, String customerId, String product, Integer quantity, Double price, OrderStatus status, LocalDateTime createdAt) {
+    public Order(Long id, String customerId, String product, Integer quantity, BigDecimal price,
+                 OrderStatus status, LocalDateTime createdAt) {
         this.id = id;
         this.customerId = customerId;
         this.product = product;
@@ -98,11 +101,11 @@ public class Order {
         this.quantity = quantity;
     }
 
-    public Double getPrice() {
+    public BigDecimal getPrice() {
         return price;
     }
 
-    public void setPrice(Double price) {
+    public void setPrice(BigDecimal price) {
         this.price = price;
     }
 
@@ -127,7 +130,7 @@ public class Order {
         private String customerId;
         private String product;
         private Integer quantity;
-        private Double price;
+        private BigDecimal price;
         private OrderStatus status;
         private LocalDateTime createdAt;
 
@@ -151,7 +154,7 @@ public class Order {
             return this;
         }
 
-        public Builder price(Double price) {
+        public Builder price(BigDecimal price) {
             this.price = price;
             return this;
         }

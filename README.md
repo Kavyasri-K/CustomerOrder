@@ -1,6 +1,6 @@
 # Customer Order Processing Service
 
-A robust RESTful microservice built with **Spring Boot**, **Java 21** (compatible with Java 17+), **Spring Data JPA**, and an **H2 In-Memory Database** to process and manage customer orders.
+A RESTful microservice built with **Spring Boot 3.5**, **Java 21**, **Spring Data JPA**, and **H2 In-Memory Database** to manage customer orders and order statuses.
 
 ---
 
@@ -25,9 +25,10 @@ A robust RESTful microservice built with **Spring Boot**, **Java 21** (compatibl
 ## 🛠️ Overview & Tech Stack
 
 - **Language**: Java 21 (Compatible with Java 17+)
-- **Framework**: Spring Boot 4
+- **Framework**: Spring Boot 3.5.6
 - **Persistence**: Spring Data JPA & Hibernate
 - **Database**: H2 In-Memory Database
+- **DTOs**: Java records
 - **Validation**: Jakarta Bean Validation (`@Valid`, `@NotBlank`, `@Min`, `@DecimalMin`, `@NotNull`)
 - **Testing**: JUnit 5, Mockito, Spring Boot Test (`MockMvc`), AssertJ
 - **Build Tool**: Apache Maven (Maven Wrapper `mvnw` and `mvnw.cmd` included)
@@ -44,17 +45,18 @@ order
 │   │   │   ├── controller
 │   │   │   │   └── OrderController.java              # REST endpoints (/orders)
 │   │   │   ├── dto
-│   │   │   │   ├── CreateOrderRequest.java           # Request payload with validations
-│   │   │   │   ├── UpdateOrderStatusRequest.java     # Status update payload
-│   │   │   │   ├── OrderResponse.java                # Output response DTO
-│   │   │   │   └── ErrorResponse.java                # Structured API error DTO
+│   │   │   │   ├── CreateOrderRequest.java           # Record: request payload with validations
+│   │   │   │   ├── UpdateOrderStatusRequest.java     # Record: status update payload
+│   │   │   │   ├── OrderResponse.java                # Record: output response DTO
+│   │   │   │   └── ErrorResponse.java                # Record: structured API error DTO
 │   │   │   ├── exception
 │   │   │   │   ├── GlobalExceptionHandler.java       # Centralized @RestControllerAdvice
-│   │   │   │   ├── OrderNotFoundException.java       # 404 Not Found exception
-│   │   │   │   └── InvalidOrderStatusException.java  # 400 Bad Request exception
+│   │   │   │   ├── OrderNotFoundException.java       # 404 Not Found
+│   │   │   │   ├── InvalidOrderStatusException.java  # 400 Bad Request
+│   │   │   │   └── InvalidStatusTransitionException.java # 409 Conflict
 │   │   │   ├── model
 │   │   │   │   ├── Order.java                        # JPA Entity (table: customer_orders)
-│   │   │   │   └── OrderStatus.java                  # Enum: CREATED, PROCESSING, SHIPPED, DELIVERED, CANCELLED
+│   │   │   │   └── OrderStatus.java                  # Enum + allowed status transitions
 │   │   │   ├── repository
 │   │   │   │   └── OrderRepository.java              # Spring Data JPA Repository
 │   │   │   ├── service
@@ -66,11 +68,15 @@ order
 │       └── java/com/customer/orderservice
 │           ├── integration
 │           │   └── OrderIntegrationTest.java         # End-to-end MockMvc integration tests
+│           ├── model
+│           │   └── OrderStatusTest.java              # Status transition rule tests
 │           ├── service
 │           │   └── OrderServiceTest.java             # Unit tests for Service layer with Mockito
 │           ├── validation
 │           │   └── OrderValidationTest.java          # Unit tests for Request Bean Validations
 │           └── OrderApplicationTests.java            # Spring Context load test
+├── postman
+│   └── Customer_Order_Processing_Service.postman_collection.json  # Import into Postman
 ├── pom.xml                                           # Maven dependencies and build configuration
 └── README.md                                         # Project documentation
 ```
@@ -196,7 +202,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8080/orders" `
   "customerId": "12345",
   "product": "Laptop",
   "quantity": 1,
-  "price": 1200.0,
+  "price": 1200.00,
   "status": "CREATED",
   "createdAt": "2026-11-22T20:15:30.123456"
 }
@@ -224,7 +230,7 @@ Invoke-RestMethod -Method Get -Uri "http://localhost:8080/orders/1"
   "customerId": "12345",
   "product": "Laptop",
   "quantity": 1,
-  "price": 1200.0,
+  "price": 1200.00,
   "status": "CREATED",
   "createdAt": "2026-11-22T20:15:30.123456"
 }
@@ -233,14 +239,21 @@ Invoke-RestMethod -Method Get -Uri "http://localhost:8080/orders/1"
 ---
 
 ### 3. Update Order Status (`PUT /orders/{id}/status`)
-Updates the status of an existing order.
+Moves an order to the next status. Only valid transitions are accepted.
+
+| From | Allowed next status |
+| :--- | :--- |
+| `CREATED` | `PROCESSING`, `CANCELLED` |
+| `PROCESSING` | `SHIPPED`, `CANCELLED` |
+| `SHIPPED` | `DELIVERED` |
+| `DELIVERED`, `CANCELLED` | *(none, terminal states)* |
 
 #### cURL:
 ```bash
 curl -X PUT http://localhost:8080/orders/1/status \
   -H "Content-Type: application/json" \
   -d '{
-    "status": "SHIPPED"
+    "status": "PROCESSING"
   }'
 ```
 
@@ -248,7 +261,7 @@ curl -X PUT http://localhost:8080/orders/1/status \
 ```powershell
 Invoke-RestMethod -Method Put -Uri "http://localhost:8080/orders/1/status" `
   -ContentType "application/json" `
-  -Body '{"status":"SHIPPED"}'
+  -Body '{"status":"PROCESSING"}'
 ```
 
 #### Response: `200 OK`
@@ -258,45 +271,73 @@ Invoke-RestMethod -Method Put -Uri "http://localhost:8080/orders/1/status" `
   "customerId": "12345",
   "product": "Laptop",
   "quantity": 1,
-  "price": 1200.0,
-  "status": "SHIPPED",
+  "price": 1200.00,
+  "status": "PROCESSING",
   "createdAt": "2026-11-22T20:15:30.123456"
+}
+```
+
+Errors: `400` for an unknown status, `404` for an unknown order, `409` for a transition that is not allowed (see Scenario D).
+
+---
+
+### 4. View Orders (`GET /orders`)
+Retrieves orders **page by page**, optionally filtered by customer.
+
+| Query parameter | Default | Description |
+| :--- | :--- | :--- |
+| `customerId` | *(none)* | Only return orders of this customer |
+| `page` | `0` | Zero-based page index |
+| `size` | `20` | Page size |
+| `sort` | `id,desc` | Sort field and direction, e.g. `createdAt,asc` |
+
+#### cURL:
+```bash
+curl -X GET "http://localhost:8080/orders"
+curl -X GET "http://localhost:8080/orders?customerId=12345&page=0&size=10"
+```
+
+#### PowerShell:
+```powershell
+Invoke-RestMethod -Method Get -Uri "http://localhost:8080/orders?customerId=12345&page=0&size=10"
+```
+
+#### Response: `200 OK`
+```json
+{
+  "content": [
+    {
+      "id": 1,
+      "customerId": "12345",
+      "product": "Laptop",
+      "quantity": 1,
+      "price": 1200.00,
+      "status": "PROCESSING",
+      "createdAt": "2026-11-22T20:15:30.123456"
+    }
+  ],
+  "page": {
+    "size": 10,
+    "number": 0,
+    "totalElements": 1,
+    "totalPages": 1
+  }
 }
 ```
 
 ---
 
-### 4. View All Orders (`GET /orders`)
-Retrieves a list of all stored orders.
-
-#### cURL:
-```bash
-curl -X GET http://localhost:8080/orders
-```
-
-#### PowerShell:
-```powershell
-Invoke-RestMethod -Method Get -Uri "http://localhost:8080/orders"
-```
-
-#### Response: `200 OK`
-```json
-[
-  {
-    "id": 1,
-    "customerId": "12345",
-    "product": "Laptop",
-    "quantity": 1,
-    "price": 1200.0,
-    "status": "SHIPPED",
-    "createdAt": "2026-11-22T20:15:30.123456"
-  }
-]
-```
-
----
-
 ### 5. Validation & Error Handling Scenarios
+
+Input rules (violations return `400 Bad Request` with field-level `details`):
+
+| Field | Rule | Error Message |
+| :--- | :--- | :--- |
+| `customerId` | `@NotBlank` | `Customer ID is required and cannot be blank` |
+| `product` | `@NotBlank` | `Product is required and cannot be blank` |
+| `quantity` | `@NotNull`, `@Min(1)` | `Quantity must be greater than 0` |
+| `price` | `@NotNull`, `@DecimalMin("0.01")` | `Price must be greater than 0` |
+| `status` | Valid enum value | `Invalid status: '...'. Allowed values: [CREATED, PROCESSING, SHIPPED, DELIVERED, CANCELLED]` |
 
 #### Scenario A: Missing Customer ID, Invalid Quantity & Price
 **Request**:
@@ -359,11 +400,30 @@ curl -X PUT http://localhost:8080/orders/1/status \
 }
 ```
 
+#### Scenario D: Status Transition Not Allowed
+**Request** (the order is already `DELIVERED`):
+```bash
+curl -X PUT http://localhost:8080/orders/1/status \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "CREATED"
+  }'
+```
+**Response**: `409 Conflict`
+```json
+{
+  "timestamp": "2026-11-22T20:22:00.445566",
+  "status": 409,
+  "error": "Invalid Status Transition",
+  "message": "Cannot change order status from DELIVERED to CREATED"
+}
+```
+
 ---
 
 ## 🧪 Testing
 
-The project has comprehensive automated test coverage spanning unit and integration tests.
+The project has automated unit and integration tests (31 in total).
 
 ### Run All Tests
 ```powershell
@@ -375,26 +435,26 @@ The project has comprehensive automated test coverage spanning unit and integrat
 ```
 
 ### Test Suites Included:
-1. **Unit Tests - Service Layer (`OrderServiceTest.java`)**:
-   - `createOrder_Success` - Verifies entity mapping, saving, and DTO conversion.
-   - `getOrderById_Success` - Verifies order retrieval.
-   - `getOrderById_NotFound` - Verifies `OrderNotFoundException` is thrown when ID does not exist.
-   - `getAllOrders_Success` - Verifies listing of all orders.
-   - `updateOrderStatus_Success` - Verifies status update logic.
-   - `updateOrderStatus_InvalidStatus` - Verifies rejection of unknown statuses.
-   - `updateOrderStatus_NotFound` - Verifies updating non-existent order.
+1. **Service layer (`OrderServiceTest.java`)**, 12 tests with a mocked repository:
+   - `testCreateOrder`, `testCreateOrder_PriceScale` (price rounded to 2 decimals)
+   - `testGetOrderById_Success`, `testGetOrderById_NotFound`
+   - `testGetOrders_All`, `testGetOrders_ByCustomer`, `testGetOrders_BlankCustomerId`
+   - `testUpdateOrderStatus_Success`, `testUpdateOrderStatus_InvalidTransition`, `testUpdateOrderStatus_FromTerminalState`, `testUpdateOrderStatus_InvalidStatus`, `testUpdateOrderStatus_NotFound`
 
-2. **Unit Tests - Validation Logic (`OrderValidationTest.java`)**:
-   - Tests blank/null `customerId`.
-   - Tests `quantity <= 0`.
-   - Tests `price <= 0`.
-   - Tests valid payload acceptance.
+2. **Status rules (`OrderStatusTest.java`)**, 3 tests: allowed transitions, rejected transitions, terminal states.
 
-3. **Integration Tests (`OrderIntegrationTest.java`)**:
-   - Tests `POST /orders` (successful creation + validation rejection).
-   - Tests `GET /orders/{id}` (existing order + 404 not found).
-   - Tests `PUT /orders/{id}/status` (valid update + invalid status handling).
-   - Tests `GET /orders` (retrieval of all persisted orders).
+3. **Validation (`OrderValidationTest.java`)**, 4 tests: blank `customerId`, `quantity <= 0`, `price <= 0`, valid payload.
+
+4. **Integration (`OrderIntegrationTest.java`)**, 11 tests with `MockMvc`:
+   - `POST /orders` (success + validation failure)
+   - `GET /orders/{id}` (found + 404)
+   - `PUT /orders/{id}/status` (valid, 404, invalid status, illegal transition 409)
+   - `GET /orders` (list, filter by `customerId`, pagination)
+
+5. **Context load (`OrderApplicationTests.java`)**, 1 test.
+
+### Postman
+Import `postman/Customer_Order_Processing_Service.postman_collection.json` into Postman. It uses a `baseUrl` variable (default `http://localhost:8080`) and has requests for every endpoint, including the error cases.
 
 ---
 
@@ -402,21 +462,24 @@ The project has comprehensive automated test coverage spanning unit and integrat
 
 1. **Order Status Lifecycle**:
    - Default status upon creation is `CREATED`.
-   - Allowed statuses: `CREATED`, `PROCESSING`, `SHIPPED`, `DELIVERED`, and `CANCELLED`.
-   - Status updates are case-insensitive (e.g., `"shipped"` is automatically converted to `SHIPPED`).
+   - Allowed statuses: `CREATED`, `PROCESSING`, `SHIPPED`, `DELIVERED`, `CANCELLED`.
+   - Only these transitions are allowed: `CREATED -> PROCESSING -> SHIPPED -> DELIVERED`, and `CREATED`/`PROCESSING -> CANCELLED`. `DELIVERED` and `CANCELLED` are final. Anything else returns `409 Conflict`.
+   - Status updates are case-insensitive (e.g., `"processing"` is converted to `PROCESSING`).
 
 2. **Customer Model**:
-   - For this service, `customerId` is provided as a unique String identifier from an external customer/auth service. A separate Customer table was not required by the specification.
+   - `customerId` is a String identifier supplied by an external customer/auth service. The service does **not** check that the customer exists, and no Customer table is included.
 
 3. **Data Types & Precision**:
-   - Order IDs are auto-generated numerical identifiers (`Long` with `GenerationType.IDENTITY`).
-   - `price` is modeled as `Double` with `@DecimalMin("0.01")` validation ensuring it is strictly positive (`> 0`).
-   - `quantity` is modeled as `Integer` with `@Min(1)` validation ensuring it is strictly positive (`> 0`).
+   - Order IDs are auto-generated (`Long`, `GenerationType.IDENTITY`).
+   - `price` is a `BigDecimal` stored as `DECIMAL(19,2)` and rounded to 2 decimal places, with `@DecimalMin("0.01")` ensuring it is positive.
+   - `quantity` is an `Integer` with `@Min(1)`.
 
-4. **Persistence & Scope**:
-   - An in-memory H2 database (`jdbc:h2:mem:orderdb`) is utilized as required, keeping the application lightweight and self-contained without requiring external database installation.
-   - Data persists for the duration of the application runtime.
-   - `createdAt` timestamp is automatically populated via `@PrePersist` when the order is saved.
+4. **Listing**:
+   - `GET /orders` is paginated (default page size 20, newest first) and can be filtered by `customerId`.
 
-5. **Error Format**:
-   - Error responses adhere to a consistent structure (`timestamp`, `status`, `error`, `message`, and optional `details` array for field validation errors).
+5. **Persistence & Scope**:
+   - An in-memory H2 database (`jdbc:h2:mem:orderdb`) is used, so data lasts only while the application runs.
+   - `createdAt` is populated automatically via `@PrePersist`.
+
+6. **Error Format**:
+   - Error responses share one structure (`timestamp`, `status`, `error`, `message`, and an optional `details` array for field validation errors).

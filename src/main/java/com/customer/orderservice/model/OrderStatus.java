@@ -5,5 +5,20 @@ public enum OrderStatus {
     PROCESSING,
     SHIPPED,
     DELIVERED,
-    CANCELLED
+    CANCELLED;
+
+    /**
+     * Allowed lifecycle:
+     * CREATED -> PROCESSING -> SHIPPED -> DELIVERED
+     * CREATED / PROCESSING -> CANCELLED
+     * DELIVERED and CANCELLED are terminal.
+     */
+    public boolean canTransitionTo(OrderStatus next) {
+        return switch (this) {
+            case CREATED -> next == PROCESSING || next == CANCELLED;
+            case PROCESSING -> next == SHIPPED || next == CANCELLED;
+            case SHIPPED -> next == DELIVERED;
+            case DELIVERED, CANCELLED -> false;
+        };
+    }
 }
